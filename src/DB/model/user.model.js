@@ -1,9 +1,9 @@
 import Joi from "joi";
 import { Schema, model } from "mongoose";
 
-  function arrayLimit(val) {
-    return val.length <= 5;
-  }
+function arrayLimit(val) {
+  return val.length <= 2;
+}
 
 
 const userSchema = new Schema(
@@ -28,12 +28,17 @@ const userSchema = new Schema(
       required: [true, "password is required"],
     },
 
-    otpCode: { type: String },
-    otpExpireTime: { type: Date },
     isVerified: {
       type: Boolean,
       default: false,
     },
+
+    role: {
+      type: String,
+      enum: ["User", "Admin"],
+      default: "User",
+    },
+
 
     publicKey: { type: String },
     privateKey: { type: String },
@@ -43,6 +48,13 @@ const userSchema = new Schema(
       public_id: { type: String },
     },
 
+    gallery: [
+      {
+        secure_url: String,
+        public_id: String,
+      }
+    ],
+
     coverPictures: {
       type: [
         {
@@ -50,11 +62,17 @@ const userSchema = new Schema(
           public_id: String,
         },
       ],
-      validate: [arrayLimit, "{PATH} exceed the limit of 5"],
+      validate: [arrayLimit, "{PATH} exceed the limit of 2"],
     },
+
+    profileViews: {
+      type: Number,
+      default: 0,
+    },
+
   },
 
-  
+
   {
     timestamps: true,
   },

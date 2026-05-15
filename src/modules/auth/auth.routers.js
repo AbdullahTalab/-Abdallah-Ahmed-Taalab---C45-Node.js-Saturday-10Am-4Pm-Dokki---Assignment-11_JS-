@@ -12,8 +12,19 @@ router.post(
   authController.signup,
 );
 
-router.post("/verify", authController.verifyOTP);
+router.post(
+  "/verify",
+  authController.verifyOTP
+);
 
-router.post("/login", authController.login);
+router.post(
+  "/resend-otp",
+  authController.resendOtp
+);
+
+router.post(
+  "/login",
+  authController.login
+);
 
 export default router;
