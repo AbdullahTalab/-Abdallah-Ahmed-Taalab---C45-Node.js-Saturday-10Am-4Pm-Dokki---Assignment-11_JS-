@@ -88,17 +88,63 @@ export const loginService = async (data) => {
   const { email, password } = data;
 
   const user = await userModel.findOne({ email });
-  if (!user || !user.isVerified) {
-    throw new Error("Invalid credentials or unverified account", {
-      cause: 401,
-    });
+  if (!user) {
+    throw new Error("Invalid credentials", { cause: 401 });
+  }
+
+  if (user.lockUntil && user.lockUntil > Date.now()) {
+    const remainingTime = Math.ceil((user.lockUntil - Date.now()) / 1000 / 60);
+    throw new Error(`Your account is temporarily banned.Try again after ${remainingTime}minutes`, { cause: 403 });
+
+  }
+
+  if (!user.isVerified) {
+    throw new Error("Please verify your account first", { cause: 401 });
+
   }
 
   const isPasswordMatch = await argon2.verify(user.password, password);
 
   if (!isPasswordMatch) {
+    user.loginAttempts += 1;
+    if (user.loginAttempts >= 5) {
+      user.lockUntil = Date.now() + 5 * 60 * 1000;
+      user.loginAttempts = 0;
+      await user.save();
+      throw new Error("Too many failed attempts. Your account has been banned for 5 minutes.", { cause: 403 });
+
+    }
+
+    await user.save();
     throw new Error("Invalid credentials", { cause: 401 });
+
   }
+
+  user.loginAttempts = 0;
+  user.lockUntil = null;
+  await user.save();
+
+
+  if (user.isTwoStepAuthEnabled) {
+    const nanoid = customAlphabet("123456789", 6);
+    const setpTwoOtp = nanoid();
+
+    await redisClient.setEx(`2sa${user.email}`, 300, stepTwoOpt);
+
+    await sendEmail(
+      user.email,
+      "Login Verification cod (2FA)",
+      `<h1>Your 2-Step verification cod is :${stepTwoOtp}</h1>`
+    );
+
+    return {
+      message: "2-Step verification required. Please check your email for the OTP.",
+      requires2FA: true,
+      email: user.email
+    };
+
+  }
+
 
   const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, {
     expiresIn: "1h",
@@ -111,7 +157,7 @@ export const loginService = async (data) => {
 export const resendOtpService = async (email) => {
   const user = await userModel.findOne({ email });
   if (!user) throw new Error("User not found", { cause: 404 });
-  
+
   const nanoid = customAlphabet("1234567890", 6);
   const newOtp = nanoid();
 
@@ -120,5 +166,122 @@ export const resendOtpService = async (email) => {
 
   await sendEmail(email, "Resend: Confirm your account", `<h1>${newOtp}</h1>`);
   return { message: "New OTP sent to your email" };
+};
+
+// =====================[Enable Two Step Auth Service]
+
+export const enableTwoStepAuthService = async (userId) => {
+  const user = await userModel.findById(userId);
+  if (!user) throw new Error("User not found", { cause: 404 });
+
+  const nanoid = customAlphabet("1234567890", 6);
+  const otp = nanoid();
+
+  await redisClient.setEx(`enable2fa:${user.email}`, 300, otp);
+
+  await sendEmail(user.email, "Enable 2-Step Verification", `<h1>Your activation code is: ${otp}</h1>`);
+  return { message: "Activation OTP sent to your email" };
+
+};
+
+// =====================[Confirm Two Step Auth Service]
+
+export const confirmTwoStepAuthService = async (userId, otp) => {
+  const user = await userModel.findById(userId);
+  if (!user) throw new Error("User not found", { cause: 404 });
+
+  const storedOtp = await redisClient.get(`enable2fa:${user.email}`);
+  if (!storedOtp || storedOtp !== otp) {
+    throw new Error("Invalid or expired OTP code", { cause: 400 });
+  }
+
+  user.isTwoStepAuthEnabled = true;
+  await user.save();
+  await redisClient.del(`enable2fa:${user, email}`);
+
+  return { message: "2-Step verification has been successfully enabled on your account" };
+
+};
+
+
+// =====================[Login Confirm 2FA Service]
+
+export const loginConfirm2FAService = async (data) => {
+  const { email, otp } = data;
+
+  const storedOtp = await redisClient.get(`2fa:${email}`);
+  if (!storedOtp || storedOtp !== otp) {
+    throw new Error("Invalid or expired 2FA OTP code", { cause: 400 });
+  }
+
+  const user = await userModel.findOne({ email });
+  if (!user) throw new Error("User not found", { cause: 404 });
+
+  await redisClient.del(`2fa:${email}`);
+
+  const token = jwt.sign({ id: user._id, email: user.email }, JWT_SECRET, {
+    expiresIn: "1h",
+  });
+
+  return { token };
+};
+
+// =====================[Update Password Service]
+
+export const updatePasswordService = async (userId, data) => {
+  const { oldPassword, newPassword } = data;
+
+  const user = await userModel.findById(userId);
+  if (!user) throw new Error("User not found", { cause: 404 });
+
+
+  const isMatch = await argon2.verify(user.password, oldPassword);
+  if (!isMatch) throw new Error("Old password is incorrect", { cause: 400 });
+
+  user.password = await argon2.hash(newPassword);
+  await user.save();
+  return { message: "Password updated successfully" };
+
+};
+
+
+// =====================[Forget Password Request Service]
+
+export const forgetPasswordRequestService = async (email) => {
+
+  const user = await userModel.findOne({ email });
+  if (!user) throw new Error("User not found", { cause: 404 });
+
+  const nanoid = customAlphabet("1234567890", 6);
+  const resetOtp = nanoid();
+
+  await redisClient.setEx(`forget:${email}`, 600, resetOtp);
+
+  await sendEmail(email, "Reset Password OTP", `<h1>Your password reset code is: ${resetOtp}</h1>`);
+  return { message: "Reset code sent to your email" };
+};
+
+// =====================[Reset Password Service]
+
+export const resetPasswordService = async (data) => {
+  const { email, otp, newPassword } = data;
+
+  const storedOtp = await redisClient.get(`forget:${email}`);
+  if (!storedOtp || storedOtp !== otp) {
+    throw new Error("Invalid or expired rest OTP code", { cause: 400 });
+  }
+
+  const user = await userModel.findOne({ email });
+  if (!user) throw new Error("User not found", { cause: 404 });
+
+
+  user.password = await argon2.hash(newPassword);
+  user.loginAttempts = 0;
+  user.lockUntil = null;
+  await user.save();
+  await redisClient.del(`forget:${email}`);
+
+  return { message: "Password has been reset successfully. You can now login with your new password." };
+
 };
 

@@ -70,6 +70,27 @@ const userSchema = new Schema(
       default: 0,
     },
 
+    loginAttempts: {
+      type: Number,
+      default: 0,
+    },
+
+    luckUntil: {
+      type: Date,
+      default: null,
+    },
+
+    isTwoStepAuthEnabled: {
+      type: Boolean,
+      default: false,
+    },
+
+    twoStepAuthCode: {
+      type: String,
+      default: null,
+    },
+
+
   },
 
 
